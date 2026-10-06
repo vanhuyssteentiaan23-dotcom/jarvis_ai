@@ -1,6 +1,7 @@
 import { consumeAction } from "@/lib/action-types";
 import { createBranch, createPullRequest, updateFile, getBranch } from "@/lib/providers/github";
 import { createDeployment } from "@/lib/providers/vercel";
+import { sendEmail } from "@/lib/providers/email";
 
 export async function POST(request: Request) {
   try {
@@ -17,20 +18,21 @@ export async function POST(request: Request) {
       const result = await createBranch(input.owner, input.repo, input.branch, branch.object.sha);
       return Response.json({ ok: true, result: { branch: input.branch, ref: result.ref } });
     }
-
     if (action.kind === "github_create_file") {
       const result = await updateFile(input.owner, input.repo, input.path, input.message, input.content, input.branch);
       return Response.json({ ok: true, result: { path: result.content?.path, commit: result.commit?.sha } });
     }
-
     if (action.kind === "github_create_pr") {
       const result = await createPullRequest(input.owner, input.repo, input.title, input.body, input.head, input.base);
       return Response.json({ ok: true, result: { number: result.number, url: result.html_url } });
     }
-
     if (action.kind === "vercel_deploy") {
       const result = await createDeployment(input.projectId, input.teamId, input.target || "production");
       return Response.json({ ok: true, result: { id: result.id, url: result.url, state: result.readyState } });
+    }
+    if (action.kind === "email_send") {
+      const result = await sendEmail(input.to, input.subject, input.text);
+      return Response.json({ ok: true, result: { id: result.id } });
     }
 
     return Response.json({ error: "Unsupported action" }, { status: 400 });
