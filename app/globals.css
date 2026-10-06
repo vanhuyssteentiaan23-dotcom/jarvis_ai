@@ -35,6 +35,12 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .messageRole { font-size: 8px; letter-spacing: .16em; color: #5f6d80; margin-bottom: 4px; font-weight: 700; }
 .miniOrb { width: 22px; height: 22px; flex: 0 0 auto; margin-top: 13px; }
 .typing { color: #667489 !important; }
+.approval { margin-top: 13px; padding: 12px; border: 1px solid #26334a; background: #101722; border-radius: 10px; display: flex; align-items: center; gap: 16px; justify-content: space-between; }
+.approval div { display: grid; gap: 3px; }
+.approval b { color: #e5ebf5; font-size: 12px; }
+.approval span { color: #718096; font-size: 10px; }
+.approval button { border: 0; background: #dce6ff; color: #0b1222; border-radius: 8px; padding: 9px 12px; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.approval button:disabled { opacity: .45; cursor: default; }
 .suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin: 28px 0 16px; }
 .suggestions button { border: 1px solid #202938; background: #0b0f15; color: #8793a4; border-radius: 999px; padding: 8px 12px; cursor: pointer; font-size: 11px; }
 .suggestions button:hover { border-color: #33415a; color: #b8c2d0; }
@@ -44,4 +50,4 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .composer > button { width: 40px; height: 40px; border: 0; border-radius: 10px; background: #dce6ff; color: #0b1222; cursor: pointer; font-size: 21px; }
 .composer > button:disabled { opacity: .35; cursor: default; }
 .hint { text-align: center; margin-top: 10px; color: #465365; font-size: 9px; letter-spacing: .04em; }
-@media (max-width: 760px) { .shell { grid-template-columns: 1fr; } .sidebar { display: none; } .topbar { padding: 0 20px; } .conversation { width: min(100% - 28px, 900px); padding-top: 42px; } .message.assistant, .message.user > div { max-width: 92%; } }
+@media (max-width: 760px) { .shell { grid-template-columns: 1fr; } .sidebar { display: none; } .topbar { padding: 0 20px; } .conversation { width: min(100% - 28px, 900px); padding-top: 42px; } .message.assistant, .message.user > div { max-width: 92%; } .approval { align-items: stretch; flex-direction: column; } }
