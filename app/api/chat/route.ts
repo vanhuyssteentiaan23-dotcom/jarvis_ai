@@ -7,25 +7,21 @@ const system = `You are Jarvis, a personal AI operating system. Be concise, capa
 You can answer normal questions. Use connected tools whenever the user asks about their actual GitHub/Vercel state.
 Never claim an action happened unless a tool actually succeeded.
 For external mutations, NEVER execute them directly. Prepare a confirmation action instead.
-When a preparation tool returns a token beginning with ACTION_CONFIRM:, preserve that exact token in your response on its own line so the UI can render the approval button.`;
+When a preparation tool returns ACTION_CONFIRM:<id>, preserve that exact token in your response on its own line.`;
 
 async function github(path: string) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GITHUB_TOKEN is not configured");
-  const response = await fetch(`https://api.github.com${path}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
-    cache: "no-store"
-  });
-  if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-  return response.json();
+  const r = await fetch(`https://api.github.com${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }, cache: "no-store" });
+  if (!r.ok) throw new Error(`GitHub returned ${r.status}`);
+  return r.json();
 }
-
 async function vercel(path: string) {
   const token = process.env.VERCEL_TOKEN;
   if (!token) throw new Error("VERCEL_TOKEN is not configured");
-  const response = await fetch(`https://api.vercel.com${path}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
-  if (!response.ok) throw new Error(`Vercel returned ${response.status}`);
-  return response.json();
+  const r = await fetch(`https://api.vercel.com${path}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+  if (!r.ok) throw new Error(`Vercel returned ${r.status}`);
+  return r.json();
 }
 
 export async function POST(request: Request) {
@@ -42,7 +38,7 @@ export async function POST(request: Request) {
         getSystemStatus: tool({
           description: "Return Jarvis integration readiness.",
           inputSchema: z.object({}),
-          execute: async () => ({ github: Boolean(process.env.GITHUB_TOKEN), vercel: Boolean(process.env.VERCEL_TOKEN), email: Boolean(process.env.RESEND_API_KEY) })
+          execute: async () => ({ github: Boolean(process.env.GITHUB_TOKEN), vercel: Boolean(process.env.VERCEL_TOKEN), email: Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL) })
         }),
         listGitHubRepositories: tool({
           description: "List accessible GitHub repositories.",
@@ -71,7 +67,7 @@ export async function POST(request: Request) {
           }
         }),
         prepareVercelDeploy: tool({
-          description: "Prepare a Vercel deployment for user confirmation. Do not execute it.",
+          description: "Prepare a Vercel deployment for confirmation. Never execute it.",
           inputSchema: z.object({ projectId: z.string(), projectName: z.string(), teamId: z.string().optional(), target: z.enum(["production", "preview"]).default("production") }),
           execute: async ({ projectId, projectName, teamId, target }) => {
             const action = stageAction({ kind: "vercel_deploy", title: `Deploy ${projectName}`, description: `Deploy ${projectName} to ${target} on Vercel.`, risk: target === "production" ? "high" : "medium", input: { projectId, projectName, teamId, target } });
@@ -79,7 +75,7 @@ export async function POST(request: Request) {
           }
         }),
         prepareGitHubBranch: tool({
-          description: "Prepare creation of a GitHub branch for confirmation. Do not execute it.",
+          description: "Prepare creation of a GitHub branch for confirmation. Never execute it.",
           inputSchema: z.object({ owner: z.string(), repo: z.string(), base: z.string(), branch: z.string() }),
           execute: async ({ owner, repo, base, branch }) => {
             const action = stageAction({ kind: "github_create_branch", title: `Create branch ${branch}`, description: `Create ${branch} from ${base} in ${owner}/${repo}.`, risk: "medium", input: { owner, repo, base, branch } });
@@ -87,10 +83,18 @@ export async function POST(request: Request) {
           }
         }),
         prepareGitHubFileChange: tool({
-          description: "Prepare a GitHub file change for confirmation. Do not execute it.",
+          description: "Prepare a GitHub file change for confirmation. Never execute it.",
           inputSchema: z.object({ owner: z.string(), repo: z.string(), branch: z.string(), path: z.string(), message: z.string(), content: z.string() }),
           execute: async (input) => {
             const action = stageAction({ kind: "github_create_file", title: `Change ${input.path}`, description: `Commit a change to ${input.path} on ${input.owner}/${input.repo}.`, risk: "high", input });
+            return `ACTION_CONFIRM:${action.id}`;
+          }
+        }),
+        prepareEmail: tool({
+          description: "Prepare an email for explicit user approval. Never send it directly.",
+          inputSchema: z.object({ to: z.array(z.string().email()).min(1).max(50), subject: z.string().min(1), text: z.string().min(1) }),
+          execute: async ({ to, subject, text }) => {
+            const action = stageAction({ kind: "email_send", title: `Send email: ${subject}`, description: `Send this email to ${to.length} recipient(s).`, risk: "high", input: { to, subject, text } });
             return `ACTION_CONFIRM:${action.id}`;
           }
         })
