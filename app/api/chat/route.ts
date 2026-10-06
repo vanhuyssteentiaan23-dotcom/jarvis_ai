@@ -1,21 +1,19 @@
 import { openai } from "@ai-sdk/openai";
 import { generateText, tool } from "ai";
 import { z } from "zod";
+import { stageAction } from "@/lib/action-types";
 
 const system = `You are Jarvis, a personal AI operating system. Be concise, capable, and transparent.
 You can answer normal questions. Use connected tools whenever the user asks about their actual GitHub/Vercel state.
 Never claim an action happened unless a tool actually succeeded.
-Current external tools are read-only. For future mutations (sending email, merging/deleting, production changes), require explicit confirmation before execution.`;
+For external mutations, NEVER execute them directly. Prepare a confirmation action instead.
+When a preparation tool returns a token beginning with ACTION_CONFIRM:, preserve that exact token in your response on its own line so the UI can render the approval button.`;
 
 async function github(path: string) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GITHUB_TOKEN is not configured");
   const response = await fetch(`https://api.github.com${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28"
-    },
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     cache: "no-store"
   });
   if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
@@ -25,10 +23,7 @@ async function github(path: string) {
 async function vercel(path: string) {
   const token = process.env.VERCEL_TOKEN;
   if (!token) throw new Error("VERCEL_TOKEN is not configured");
-  const response = await fetch(`https://api.vercel.com${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store"
-  });
+  const response = await fetch(`https://api.vercel.com${path}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
   if (!response.ok) throw new Error(`Vercel returned ${response.status}`);
   return response.json();
 }
@@ -37,12 +32,7 @@ export async function POST(request: Request) {
   try {
     const { messages } = await request.json();
     if (!Array.isArray(messages)) return Response.json({ error: "Invalid messages" }, { status: 400 });
-
-    if (!process.env.OPENAI_API_KEY) {
-      return Response.json({
-        text: "I’m online, but the AI provider is not configured yet. Add OPENAI_API_KEY to this deployment, then I can become the full conversational Jarvis."
-      });
-    }
+    if (!process.env.OPENAI_API_KEY) return Response.json({ text: "I’m online, but OPENAI_API_KEY is not configured yet." });
 
     const result = await generateText({
       model: openai(process.env.JARVIS_MODEL || "gpt-5-mini"),
@@ -50,89 +40,66 @@ export async function POST(request: Request) {
       messages,
       tools: {
         getSystemStatus: tool({
-          description: "Return Jarvis integration readiness. Use when the user asks what is connected or available.",
+          description: "Return Jarvis integration readiness.",
           inputSchema: z.object({}),
-          execute: async () => ({
-            github: Boolean(process.env.GITHUB_TOKEN),
-            vercel: Boolean(process.env.VERCEL_TOKEN),
-            email: Boolean(process.env.RESEND_API_KEY),
-            note: "External mutations are intentionally not exposed yet."
-          })
+          execute: async () => ({ github: Boolean(process.env.GITHUB_TOKEN), vercel: Boolean(process.env.VERCEL_TOKEN), email: Boolean(process.env.RESEND_API_KEY) })
         }),
         listGitHubRepositories: tool({
-          description: "List the user's accessible GitHub repositories. Use for questions about available repos/projects.",
+          description: "List accessible GitHub repositories.",
           inputSchema: z.object({}),
-          execute: async () => {
-            const data = await github("/user/repos?per_page=30&sort=updated");
-            return data.map((repo: any) => ({
-              name: repo.full_name,
-              private: repo.private,
-              defaultBranch: repo.default_branch,
-              url: repo.html_url,
-              updatedAt: repo.updated_at
-            }));
-          }
+          execute: async () => (await github("/user/repos?per_page=30&sort=updated")).map((r: any) => ({ name: r.full_name, private: r.private, defaultBranch: r.default_branch, url: r.html_url }))
         }),
         getGitHubRepository: tool({
-          description: "Inspect a specific GitHub repository. Use owner/repo format.",
+          description: "Inspect a GitHub repository.",
           inputSchema: z.object({ owner: z.string(), repo: z.string() }),
           execute: async ({ owner, repo }) => {
-            const data = await github(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
-            return {
-              name: data.full_name,
-              description: data.description,
-              private: data.private,
-              defaultBranch: data.default_branch,
-              stars: data.stargazers_count,
-              openIssues: data.open_issues_count,
-              url: data.html_url,
-              updatedAt: data.updated_at
-            };
+            const r = await github(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+            return { name: r.full_name, description: r.description, defaultBranch: r.default_branch, openIssues: r.open_issues_count, url: r.html_url, updatedAt: r.updated_at };
           }
         }),
         listVercelProjects: tool({
-          description: "List Vercel projects. Use when the user asks what is deployed or what projects they have.",
+          description: "List Vercel projects.",
           inputSchema: z.object({ limit: z.number().min(1).max(50).default(20) }),
-          execute: async ({ limit }) => {
-            const data = await vercel(`/v9/projects?limit=${limit}`);
-            return data.projects.map((project: any) => ({
-              name: project.name,
-              id: project.id,
-              framework: project.framework,
-              url: project.targets?.production?.alias?.[0] ? `https://${project.targets.production.alias[0]}` : null,
-              updatedAt: project.updatedAt
-            }));
-          }
+          execute: async ({ limit }) => (await vercel(`/v9/projects?limit=${limit}`)).projects.map((p: any) => ({ name: p.name, id: p.id, framework: p.framework, url: p.targets?.production?.alias?.[0] ? `https://${p.targets.production.alias[0]}` : null }))
         }),
         listVercelDeployments: tool({
-          description: "List recent Vercel deployments. Use when the user asks about recent deployments or deployment status.",
-          inputSchema: z.object({
-            projectId: z.string().optional(),
-            limit: z.number().min(1).max(20).default(10)
-          }),
+          description: "List recent Vercel deployments.",
+          inputSchema: z.object({ projectId: z.string().optional(), limit: z.number().min(1).max(20).default(10) }),
           execute: async ({ projectId, limit }) => {
-            const query = new URLSearchParams({ limit: String(limit) });
-            if (projectId) query.set("projectId", projectId);
-            const data = await vercel(`/v6/deployments?${query.toString()}`);
-            return data.deployments.map((deployment: any) => ({
-              id: deployment.uid,
-              project: deployment.name,
-              state: deployment.readyState,
-              url: deployment.url ? `https://${deployment.url}` : null,
-              target: deployment.target,
-              createdAt: deployment.createdAt,
-              commit: deployment.meta?.githubCommitSha ?? null,
-              branch: deployment.meta?.githubCommitRef ?? null
-            }));
+            const q = new URLSearchParams({ limit: String(limit) }); if (projectId) q.set("projectId", projectId);
+            return (await vercel(`/v6/deployments?${q}`)).deployments.map((d: any) => ({ id: d.uid, project: d.name, state: d.readyState, url: d.url ? `https://${d.url}` : null, target: d.target, commit: d.meta?.githubCommitSha ?? null, branch: d.meta?.githubCommitRef ?? null }));
+          }
+        }),
+        prepareVercelDeploy: tool({
+          description: "Prepare a Vercel deployment for user confirmation. Do not execute it.",
+          inputSchema: z.object({ projectId: z.string(), projectName: z.string(), teamId: z.string().optional(), target: z.enum(["production", "preview"]).default("production") }),
+          execute: async ({ projectId, projectName, teamId, target }) => {
+            const action = stageAction({ kind: "vercel_deploy", title: `Deploy ${projectName}`, description: `Deploy ${projectName} to ${target} on Vercel.`, risk: target === "production" ? "high" : "medium", input: { projectId, projectName, teamId, target } });
+            return `ACTION_CONFIRM:${action.id}`;
+          }
+        }),
+        prepareGitHubBranch: tool({
+          description: "Prepare creation of a GitHub branch for confirmation. Do not execute it.",
+          inputSchema: z.object({ owner: z.string(), repo: z.string(), base: z.string(), branch: z.string() }),
+          execute: async ({ owner, repo, base, branch }) => {
+            const action = stageAction({ kind: "github_create_branch", title: `Create branch ${branch}`, description: `Create ${branch} from ${base} in ${owner}/${repo}.`, risk: "medium", input: { owner, repo, base, branch } });
+            return `ACTION_CONFIRM:${action.id}`;
+          }
+        }),
+        prepareGitHubFileChange: tool({
+          description: "Prepare a GitHub file change for confirmation. Do not execute it.",
+          inputSchema: z.object({ owner: z.string(), repo: z.string(), branch: z.string(), path: z.string(), message: z.string(), content: z.string() }),
+          execute: async (input) => {
+            const action = stageAction({ kind: "github_create_file", title: `Change ${input.path}`, description: `Commit a change to ${input.path} on ${input.owner}/${input.repo}.`, risk: "high", input });
+            return `ACTION_CONFIRM:${action.id}`;
           }
         })
       },
       maxOutputTokens: 900
     });
-
     return Response.json({ text: result.text });
   } catch (error) {
     console.error(error);
-    return Response.json({ error: "Jarvis backend error" }, { status: 500 });
+    return Response.json({ error: error instanceof Error ? error.message : "Jarvis backend error" }, { status: 500 });
   }
 }
